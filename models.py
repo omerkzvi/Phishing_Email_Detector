@@ -4,6 +4,8 @@ from enums import Classification, Severity, MLStatus
 
 
 class EmailRequest(BaseModel):
+    # request payload for scanning an email
+
     sender: str = Field(..., description="The email sender address")
     subject: str = Field(default="", description="The email subject")
     body: str = Field(default="", description="Plain text body (preferred)")
@@ -12,11 +14,11 @@ class EmailRequest(BaseModel):
 
     @field_validator("sender")
     @classmethod
-    def sender_must_not_be_blank(cls, v: str) -> str:
-        v = (v or "").strip()
-        if not v:
+    def sender_must_not_be_blank(cls, value: str) -> str:
+        value = (value or "").strip()
+        if not value:
             raise ValueError("sender must not be empty")
-        return v
+        return value
 
     @field_validator("subject", "body")
     @classmethod
@@ -25,18 +27,18 @@ class EmailRequest(BaseModel):
 
     @field_validator("subject")
     @classmethod
-    def subject_len_limit(cls, v: str) -> str:
-        if len(v) > 500:
-            return v[:500]
-        return v
+    def subject_len_limit(cls, value: str) -> str:
+        if len(value) > 500:
+            return value[:500]
+        return value
 
     @field_validator("body")
     @classmethod
-    def body_len_limit(cls, v: str) -> str:
-        # keep it sane for API usage; still enough for detection
-        if len(v) > 20000:
-            return v[:20000]
-        return v
+    def body_len_limit(cls, value: str) -> str:
+        # keep payloads reasonable, still enough for detection
+        if len(value) > 20000:
+            return value[:20000]
+        return value
 
     model_config = ConfigDict(extra="ignore")
 
@@ -50,6 +52,8 @@ class MlResult(BaseModel):
 
 
 class ScanMetadata(BaseModel):
+    # debug metadat returned with the scan result
+
     sender_domain: str
     links_found: int
     heuristic_score: int
@@ -64,6 +68,7 @@ class ScanMetadata(BaseModel):
 
 
 class ScanResult(BaseModel):
+    # final API response for the gmail add on
     score: int
     classification: Classification
     severity: Severity

@@ -5,3 +5,4 @@ pandas
 scikit-learn
 joblib
 pydantic>=2.0
+bs4
