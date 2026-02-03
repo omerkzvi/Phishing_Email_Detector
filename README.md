@@ -76,7 +76,7 @@ python controller/phishing_controller.py
 Gmail Add-on Setup (Google Apps Script)
 
 Create a new Apps Script project (script.google.com)
-Paste gmail_addon.js into the editor
+Paste Gmail add on/appsscript into the editor
 Enable Advanced Gmail Service (Gmail API)
 In Script Properties, set:
 PHISHING_BACKEND_URL = https://phishing-email-detector-inv6.onrender.com/scan-email
