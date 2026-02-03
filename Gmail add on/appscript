@@ -1,0 +1,408 @@
+
+function onGmailMessageOpen(e) {
+  var accessToken = (e && e.gmail && e.gmail.accessToken) ? e.gmail.accessToken : null;
+  var messageId = (e && e.gmail && e.gmail.messageId) ? e.gmail.messageId : null;
+
+  var card = CardService.newCardBuilder()
+    .setHeader(CardService.newCardHeader().setTitle("Email Safety Scanner 3"));
+
+  if (!accessToken || !messageId) {
+    card.addSection(
+      CardService.newCardSection().addWidget(
+        CardService.newTextParagraph().setText(
+          ltr_("Could not read message context (missing access token or message id).")
+        )
+      )
+    );
+    return [card.build()];
+  }
+
+  // Allow reading current message (needed for GmailApp.getMessageById sometimes)
+  GmailApp.setCurrentMessageAccessToken(accessToken);
+
+  // Advanced Gmail API (must be enabled in Apps Script: Services -> Gmail API)
+  var msg;
+  try {
+    msg = Gmail.Users.Messages.get("me", messageId, { format: "full" });
+  } catch (err) {
+    card.addSection(
+      CardService.newCardSection().addWidget(
+        CardService.newTextParagraph().setText(
+          ltr_(
+            "Failed to read the message via Gmail API. Make sure Advanced Gmail service is enabled.\n\n" +
+            escapeHtml_(String(err))
+          )
+        )
+      )
+    );
+    return [card.build()];
+  }
+
+  var headers = extractHeaders_(msg);
+  var subject = getHeader_(headers, "Subject") || "";
+  var from = getHeader_(headers, "From") || "";
+  var replyTo = getHeader_(headers, "Reply-To") || "";
+  var returnPath = getHeader_(headers, "Return-Path") || "";
+
+  var bodies = extractBodies_(msg);
+  var plainBody = bodies.plain || "";
+  var htmlBody = bodies.html || "";
+
+  var section = CardService.newCardSection();
+  section.addWidget(CardService.newTextParagraph()
+    .setText(ltr_("Click the button below to analyze this email for phishing threats.")));
+
+  var action = CardService.newAction()
+    .setFunctionName("scanEmailAction")
+    .setParameters({
+      sender: from,
+      subject: subject,
+      body: plainBody.substring(0, 20000),
+      body_html: htmlBody.substring(0, 20000),
+      headers_json: JSON.stringify({
+        "From": from,
+        "Subject": subject,
+        "Reply-To": replyTo,
+        "Return-Path": returnPath
+      })
+    });
+
+  section.addWidget(
+    CardService.newTextButton()
+      .setText("Scan for Phishing")
+      .setOnClickAction(action)
+  );
+
+  card.addSection(section);
+  return [card.build()];
+}
+
+
+// Main action (Card button)
+function scanEmailAction(e) {
+  var p = (e && e.commonEventObject && e.commonEventObject.parameters) ? e.commonEventObject.parameters : {};
+
+  var sender = p.sender || "";
+  var subject = p.subject || "";
+  var body = p.body || "";
+  var bodyHtml = p.body_html || "";
+  var headersJson = p.headers_json || "{}";
+
+  var pre = quickUrlPrecheck_(body + "\n" + bodyHtml);
+
+  if (pre.highRisk) {
+    return createPrecheckWarningCard_(sender, subject, body, bodyHtml, headersJson, pre);
+  }
+
+  return runFullBackendScan_(sender, subject, body, bodyHtml, headersJson, pre);
+}
+
+
+// Warning card + full scan button
+function createPrecheckWarningCard_(sender, subject, body, bodyHtml, headersJson, pre) {
+  var section = CardService.newCardSection();
+
+  section.addWidget(CardService.newTextParagraph().setText(
+    ltr_(
+      "<b>Quick Local Check: High-risk indicators found</b><br>" +
+      "• " + (pre.findings || []).join("<br>• ")
+    )
+  ));
+
+  section.addWidget(CardService.newTextParagraph().setText(
+    ltr_("<i>This is a local quick check. You can still run a full scan for a more accurate result.</i>")
+  ));
+
+  var action = CardService.newAction()
+    .setFunctionName("runFullScanAfterWarning_")
+    .setParameters({
+      sender: sender,
+      subject: subject,
+      body: body,
+      body_html: bodyHtml,
+      headers_json: headersJson,
+      pre_findings: JSON.stringify(pre.findings || []),
+      pre_linksFound: String(pre.linksFound || 0)
+    });
+
+  section.addWidget(
+    CardService.newTextButton()
+      .setText("Run Full Scan (Backend)")
+      .setOnClickAction(action)
+  );
+
+  return CardService.newCardBuilder()
+    .setHeader(CardService.newCardHeader().setTitle("Quick Warning"))
+    .addSection(section)
+    .build();
+}
+
+function runFullScanAfterWarning_(e) {
+  var p = (e && e.commonEventObject && e.commonEventObject.parameters) ? e.commonEventObject.parameters : {};
+
+  var pre = {
+    highRisk: true,
+    mediumRisk: false,
+    findings: JSON.parse(p.pre_findings || "[]"),
+    linksFound: Number(p.pre_linksFound || "0")
+  };
+
+  return runFullBackendScan_(
+    p.sender || "",
+    p.subject || "",
+    p.body || "",
+    p.body_html || "",
+    p.headers_json || "{}",
+    pre
+  );
+}
+
+
+// Backend scan
+function runFullBackendScan_(sender, subject, body, bodyHtml, headersJson, pre) {
+  var url = getBackendUrl_();
+
+  var payloadObj = {
+    sender: sender,
+    subject: subject,
+    body: body,
+    body_html: bodyHtml,
+    headers: {}
+  };
+
+  try {
+    payloadObj.headers = JSON.parse(headersJson || "{}");
+  } catch (_) {
+    payloadObj.headers = {};
+  }
+
+  var options = {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify(payloadObj),
+    muteHttpExceptions: true
+  };
+
+  try {
+    var response = UrlFetchApp.fetch(url, options);
+    var code = response.getResponseCode();
+    var text = response.getContentText();
+
+    if (code < 200 || code >= 300) {
+      return CardService.newCardBuilder()
+        .setHeader(CardService.newCardHeader().setTitle("Backend Error"))
+        .addSection(CardService.newCardSection().addWidget(
+          CardService.newTextParagraph().setText(
+            ltr_(
+              "Backend returned HTTP " + code + "<br><pre>" + escapeHtml_(text) + "</pre>"
+            )
+          )
+        ))
+        .build();
+    }
+
+    var result = JSON.parse(text);
+    return createResultCard_(result, pre);
+
+  } catch (err) {
+    return CardService.newCardBuilder()
+      .setHeader(CardService.newCardHeader().setTitle("Error"))
+      .addSection(CardService.newCardSection().addWidget(
+        CardService.newTextParagraph().setText(ltr_("Could not connect to Backend: " + escapeHtml_(String(err))))
+      ))
+      .build();
+  }
+}
+
+
+// Result card
+function createResultCard_(result, pre) {
+  var section = CardService.newCardSection();
+
+  if (pre && (pre.highRisk || pre.mediumRisk) && pre.findings && pre.findings.length > 0) {
+    var title = pre.highRisk ? "<b>Quick Local Check (High Risk)</b>" : "<b>Quick Local Check (Medium Risk)</b>";
+    section.addWidget(CardService.newTextParagraph().setText(
+      ltr_(
+        title + "<br>• " + pre.findings.join("<br>• ")
+      )
+    ));
+    section.addWidget(CardService.newDivider());
+  }
+
+  var severity = result.severity || "Low";
+  var color = (severity === "High") ? "#FF0000" : ((severity === "Medium") ? "#FFA500" : "#008000");
+
+  section.addWidget(
+    CardService.newTextParagraph().setText(
+      ltr_(
+        "<b>Classification:</b> <font color=\"" + color + "\">" + (result.classification || "N/A") + "</font>"
+      )
+    )
+  );
+
+  section.addWidget(
+    CardService.newTextParagraph().setText(ltr_("<b>Score:</b> " + (result.score || 0) + "/100"))
+  );
+
+  var oc = result && result.metadata && result.metadata.overall_confidence != null ? result.metadata.overall_confidence : null;
+  if (oc != null) {
+    section.addWidget(CardService.newTextParagraph().setText(ltr_("<b>Overall confidence:</b> " + oc)));
+  }
+
+  if (result.reasons && result.reasons.length > 0) {
+    section.addWidget(
+      CardService.newTextParagraph().setText(
+        ltr_("<b>Reasons:</b><br>• " + result.reasons.join("<br>• "))
+      )
+    );
+  }
+
+  return CardService.newCardBuilder()
+    .setHeader(CardService.newCardHeader().setTitle("Analysis Result"))
+    .addSection(section)
+    .build();
+}
+
+
+// Quick local URL pre-check
+function quickUrlPrecheck_(text) {
+  var urlRegex = /((https?:\/\/|www\.)[^\s<>"']+)/ig;
+  var matches = (text || "").match(urlRegex) || [];
+
+  var shorteners = ["bit.ly","tinyurl.com","t.co","rebrand.ly","cutt.ly","rb.gy"];
+  var findings = [];
+
+  matches.forEach(function(rawUrl) {
+    var url = String(rawUrl || "").replace(/[).,;"']+$/, "");
+    if (url.indexOf("www.") === 0) url = "http://" + url;
+
+    var host = "";
+    try {
+      var m = url.match(/^https?:\/\/([^\/]+)/i);
+      host = (m && m[1]) ? String(m[1]).toLowerCase() : "";
+    } catch (e) {
+      host = "";
+    }
+    if (!host) return;
+
+    shorteners.forEach(function(s) {
+      if (host === s || host.endsWith("." + s)) findings.push("Shortened link detected: " + host);
+    });
+
+    if (host.indexOf("xn--") !== -1) findings.push("Punycode domain detected: " + host);
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) findings.push("IP-based URL detected: " + host);
+    if (url.indexOf("@") !== -1) findings.push("URL contains '@': " + url);
+
+    var dashCount = (host.match(/-/g) || []).length;
+    if (dashCount >= 4) findings.push("Suspicious domain (many dashes): " + host);
+  });
+
+  return {
+    highRisk: findings.length >= 2,
+    mediumRisk: findings.length === 1,
+    findings: findings,
+    linksFound: matches.length
+  };
+}
+
+
+// PropertiesService: backend URL
+function getBackendUrl_() {
+  var props = PropertiesService.getScriptProperties();
+  var url = props.getProperty("PHISHING_BACKEND_URL") || "https://phishing-email-detector-inv6.onrender.com/scan-email";
+
+  // Normalize: if user saved just the base host, append /scan-email
+  if (url.indexOf("http") !== 0) url = "https://" + url;
+  if (url.indexOf("/scan-email") === -1) {
+    url = url.replace(/\/+$/, "") + "/scan-email";
+  }
+  return url;
+}
+
+
+// Gmail API parsing helpers
+function extractHeaders_(msg) {
+  var headersArr = (msg && msg.payload && msg.payload.headers) ? msg.payload.headers : [];
+  var headers = {};
+  headersArr.forEach(function(h) {
+    headers[h.name] = h.value;
+  });
+  return headers;
+}
+
+function getHeader_(headers, name) {
+  if (!headers) return "";
+  if (headers[name]) return headers[name];
+  var lower = String(name || "").toLowerCase();
+  for (var k in headers) {
+    if (String(k).toLowerCase() === lower) return headers[k];
+  }
+  return "";
+}
+
+function extractBodies_(msg) {
+  var out = { plain: "", html: "" };
+  if (!msg || !msg.payload) return out;
+
+  // Handle top-level payload body (non-multipart emails)
+  walkParts_(msg.payload, out);
+
+  // Fallback: if still empty, use snippet (better than nothing)
+  if (!out.plain && !out.html && msg.snippet) {
+    out.plain = msg.snippet;
+  }
+
+  return out;
+}
+
+function walkParts_(part, out) {
+  if (!part) return;
+
+  var mimeType = part.mimeType || "";
+  var bodyData = (part.body && part.body.data) ? part.body.data : null;
+
+  // Extract content from THIS part (works for both top-level and nested parts)
+  if (bodyData && (mimeType === "text/plain" || mimeType === "text/html")) {
+    var decoded = decodeBase64Url_(bodyData);
+    if (mimeType === "text/plain" && !out.plain) out.plain = decoded;
+    if (mimeType === "text/html" && !out.html) out.html = decoded;
+  }
+
+  // Recurse into nested parts (multipart)
+  var parts = part.parts || [];
+  parts.forEach(function(p) { walkParts_(p, out); });
+}
+
+function decodeBase64Url_(data) {
+  if (data == null) return "";
+
+  if (typeof data === "object" && data.data && typeof data.data === "string") {
+    data = data.data;
+  }
+
+  if (typeof data !== "string") return "";
+
+  var b64 = data.replace(/-/g, "+").replace(/_/g, "/");
+  while (b64.length % 4 !== 0) b64 += "=";
+
+  try {
+    return Utilities.newBlob(Utilities.base64Decode(b64)).getDataAsString("UTF-8");
+  } catch (e) {
+    return "";
+  }
+}
+
+
+// Utility: HTML escape
+function escapeHtml_(s) {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+// Utility: force LTR + left align for English UI
+
+function ltr_(html) {
+  return '<div dir="ltr" style="text-align:left;">' + html + '</div>';
+}
