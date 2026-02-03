@@ -18,7 +18,7 @@ class PhishingClassifier:
     phishing detection:
     we parse the email into structured components.
     than we run a rule based heuristics and an ML model
-    and produce a final score, classification, severity, reassons and confidence.
+    and produce a final score, classification, severity, reasons and confidence.
     """
     def __init__(self):
         self.heuristics = PhishingHeuristics()
@@ -44,7 +44,7 @@ class PhishingClassifier:
             request_data.body_html,
         )
 
-        # Heuristics, generate explainable signail + a heuristic score
+        # Heuristics, generate explainable signal + a heuristic score
         heuristic_summary = self._calculate_heuristics(
             parsed=parsed_email,
             subject=request_data.subject,

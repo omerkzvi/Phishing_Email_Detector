@@ -6,7 +6,6 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, accuracy_score
 
 
-
 # Load dataset
 # Expected CSV columns: subject, body, label
 # label convention in dataset: 0 = legitimate ,1 = phishing/spam

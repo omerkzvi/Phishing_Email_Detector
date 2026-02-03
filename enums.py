@@ -14,7 +14,7 @@ class Severity(str, Enum):
     LOW = "Low"
 
 class MLStatus(str, Enum):
-    # ML stsus (techincal)
+    # ML status (techincal)
     SUCCESS = "SUCCESS"   # model and vectorizer available + prediction succeeded
     ERROR = "ERROR"       # model exists but prediction failed (runtime error)
     ML_UNAVAILABLE = "ML_UNAVAILABLE"   # missing artifacts, use heuristics-only

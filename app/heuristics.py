@@ -236,5 +236,5 @@ class PhishingHeuristics:
         # Extracts domain from a header containing an email address
         if not value:
             return ""
-        m = re.search(r"@([A-Za-z0-9\.\-]+\.[A-Za-z]{2,})", value)
-        return (m.group(1).lower() if m else "")
+        m = re.search(r"@([A-Za-z0-9.\-]+\.[A-Za-z]{2,})", value)
+        return m.group(1).lower() if m else ""
