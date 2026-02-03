@@ -4,7 +4,7 @@ function onGmailMessageOpen(e) {
   var messageId = (e && e.gmail && e.gmail.messageId) ? e.gmail.messageId : null;
 
   var card = CardService.newCardBuilder()
-    .setHeader(CardService.newCardHeader().setTitle("Email Safety Scanner 3"));
+    .setHeader(CardService.newCardHeader().setTitle("Email Safety Scanner"));
 
   if (!accessToken || !messageId) {
     card.addSection(
